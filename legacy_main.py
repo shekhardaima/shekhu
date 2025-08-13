@@ -1,6 +1,7 @@
 """
 Legacy main script for backward compatibility with the original code structure.
 This module provides the same interface as the original monolithic script.
+Optimized for Databricks runtime 14.3 and Delta Lake.
 """
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
@@ -9,6 +10,7 @@ from typing import Dict, Any
 
 # Import from the new modular structure
 from src.config.redis_config import get_redis_config
+from src.config.databricks_config import create_databricks_spark_session
 from src.data.spark_operations import get_calculations_df
 from src.data.processing import process_partition_for_cycle
 from src.utils.logging_config import get_default_logger
@@ -63,14 +65,21 @@ def process_all_cycles_no_pandas_foreach(df_ts, batch_size=5000):
 
 
 def main():
-    """Main function that replicates the original script behavior."""
-    spark = SparkSession.builder.getOrCreate()
-    df_ts = get_calculations_df(spark).cache()
-    stats = process_all_cycles_no_pandas_foreach(df_ts, batch_size=5000)
+    """Main function that replicates the original script behavior for Databricks."""
+    # Use Databricks-optimized Spark session
+    spark = create_databricks_spark_session("LegacyDataProcessing")
+    try:
+        df_ts = get_calculations_df(spark).cache()
+        stats = process_all_cycles_no_pandas_foreach(df_ts, batch_size=5000)
 
-    logger.info("=== FINAL SUMMARY ===")
-    for stat in stats:
-        logger.info(stat)
+        logger.info("=== FINAL SUMMARY ===")
+        for stat in stats:
+            logger.info(stat)
+    finally:
+        # Only stop if not running in Databricks managed environment
+        import os
+        if not os.getenv("DATABRICKS_RUNTIME_VERSION"):
+            spark.stop()
 
 
 if __name__ == "__main__":

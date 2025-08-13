@@ -1,10 +1,12 @@
 """
 Main orchestration module for the data processing pipeline.
+Optimized for Databricks runtime 14.3 and Delta Lake.
 """
 from pyspark.sql import SparkSession
 from typing import List, Dict, Any, Optional
 
 from .config.redis_config import get_redis_config
+from .config.databricks_config import DatabricksSparkManager
 from .data.spark_operations import SparkDataProcessor
 from .data.processing import DataProcessor
 from .redis.connection import RedisConnectionManager
@@ -14,20 +16,21 @@ logger = get_default_logger(__name__)
 
 
 class DataPipeline:
-    """Main data processing pipeline orchestrator."""
+    """Main data processing pipeline orchestrator for Databricks and Delta Lake."""
     
     def __init__(self, 
                  spark_session: Optional[SparkSession] = None,
                  redis_config: Optional[Dict[str, Any]] = None,
                  batch_size: int = 5000):
         """
-        Initialize the data pipeline.
+        Initialize the data pipeline for Databricks environment.
         
         Args:
-            spark_session: Optional SparkSession instance
+            spark_session: Optional SparkSession instance (will create Databricks-optimized if None)
             redis_config: Optional Redis configuration dictionary
             batch_size: Batch size for data processing
         """
+        # Initialize Databricks-optimized Spark processor
         self.spark_processor = SparkDataProcessor(spark_session)
         self.redis_config = redis_config or get_redis_config()
         self.data_processor = DataProcessor(self.redis_config, batch_size)
@@ -38,7 +41,12 @@ class DataPipeline:
         if not redis_manager.test_connection():
             raise ConnectionError("Failed to connect to Redis")
         
-        logger.info("DataPipeline initialized successfully")
+        # Test Delta table connectivity if using Databricks
+        if hasattr(self.spark_processor, 'spark_manager') and self.spark_processor.spark_manager:
+            if not self.spark_processor.spark_manager.test_delta_connectivity():
+                logger.warning("Delta table connectivity test failed - pipeline may encounter issues")
+        
+        logger.info("DataPipeline initialized successfully for Databricks environment")
     
     def run_pipeline(self, 
                     table_name: str = "clearview_prod.silver.calculations",
@@ -121,13 +129,10 @@ class DataPipeline:
 
 
 def main():
-    """Main function to run the data processing pipeline."""
+    """Main function to run the data processing pipeline on Databricks."""
     try:
-        # Initialize Spark session
-        spark = SparkSession.builder.getOrCreate()
-        
-        # Create and run pipeline
-        pipeline = DataPipeline(spark_session=spark, batch_size=5000)
+        # Create and run pipeline (will auto-create Databricks-optimized Spark session)
+        pipeline = DataPipeline(batch_size=5000)
         stats = pipeline.run_pipeline()
         
         # Log final results
@@ -139,9 +144,9 @@ def main():
         logger.error(f"Pipeline execution failed: {e}")
         raise
     finally:
-        # Clean up Spark session
-        if 'spark' in locals():
-            spark.stop()
+        # Clean up resources
+        if 'pipeline' in locals():
+            pipeline.spark_processor.cleanup()
 
 
 if __name__ == "__main__":

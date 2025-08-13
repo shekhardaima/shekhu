@@ -1,16 +1,17 @@
-# Data Processing Pipeline - Modular Architecture
+# Data Processing Pipeline - Databricks & Delta Lake Optimized
 
-This project has been restructured from a monolithic script into a modular, maintainable Python package for processing time-series data from Databricks and writing it to Redis TimeSeries.
+This project has been restructured from a monolithic script into a modular, maintainable Python package for processing time-series data from Databricks Delta tables and writing it to Redis TimeSeries. **Optimized for Databricks runtime 14.3 with Delta Lake support and Databricks Connect for local development.**
 
 ## 🏗️ Project Structure
 
 ```
 ├── src/                          # Main source package
 │   ├── __init__.py              # Package initialization
-│   ├── main.py                  # Main orchestration module
+│   ├── main.py                  # Main orchestration module (Databricks optimized)
 │   ├── config/                  # Configuration modules
 │   │   ├── __init__.py
-│   │   └── redis_config.py      # Redis configuration settings
+│   │   ├── redis_config.py      # Redis configuration settings
+│   │   └── databricks_config.py # Databricks & Delta Lake configuration
 │   ├── utils/                   # Utility modules
 │   │   ├── __init__.py
 │   │   └── logging_config.py    # Logging configuration utilities
@@ -20,19 +21,24 @@ This project has been restructured from a monolithic script into a modular, main
 │   │   └── timeseries_operations.py  # TimeSeries operations
 │   └── data/                    # Data processing modules
 │       ├── __init__.py
-│       ├── spark_operations.py  # Spark data extraction & transformation
+│       ├── spark_operations.py  # Spark DataFrame operations (Delta optimized)
 │       └── processing.py        # Partition and cycle processing
-├── legacy_main.py               # Backward compatibility script
-├── requirements.txt             # Project dependencies
-└── PROJECT_STRUCTURE.md         # This documentation
+├── legacy_main.py               # Backward compatibility script (Databricks ready)
+├── databricks_example.py        # Databricks notebook examples
+├── requirements.txt             # Project dependencies (with Databricks Connect)
+├── PROJECT_STRUCTURE.md         # This documentation
+├── DATABRICKS_SETUP.md          # Databricks deployment guide
+└── example_usage.py             # Usage examples
 ```
 
 ## 📦 Modules Overview
 
 ### 1. **Configuration Module** (`src/config/`)
 - **`redis_config.py`**: Centralized Redis configuration with environment variable support
-- Supports customization through environment variables
+- **`databricks_config.py`**: Databricks runtime 14.3 and Delta Lake optimizations
+- Supports customization through environment variables and Databricks secrets
 - Provides default configuration for backward compatibility
+- Automatic Databricks environment detection
 
 ### 2. **Utilities Module** (`src/utils/`)
 - **`logging_config.py`**: Consistent logging setup across all modules
@@ -46,28 +52,27 @@ This project has been restructured from a monolithic script into a modular, main
 - Provides both class-based and functional interfaces
 
 ### 4. **Data Processing Module** (`src/data/`)
-- **`spark_operations.py`**: Spark DataFrame operations for data extraction and transformation
+- **`spark_operations.py`**: Spark DataFrame operations optimized for Delta tables (no RDD usage)
 - **`processing.py`**: Partition processing and cycle-based data operations
-- Handles aggregation, filtering, and caching
+- Handles aggregation, filtering, and caching with Delta Lake optimizations
+- Supports Databricks adaptive query execution and auto-compaction
 
 ### 5. **Main Orchestration** (`src/main.py`)
-- **`DataPipeline`** class: High-level pipeline orchestrator
+- **`DataPipeline`** class: High-level pipeline orchestrator for Databricks
 - Combines all modules into a cohesive workflow
 - Provides methods for full pipeline execution and single cycle processing
+- Automatic Databricks environment detection and optimization
+- Delta table connectivity testing and performance monitoring
 
 ## 🚀 Usage Examples
 
-### Using the New Modular API
+### Using the New Databricks-Optimized API
 
 ```python
-from pyspark.sql import SparkSession
 from src.main import DataPipeline
 
-# Initialize Spark session
-spark = SparkSession.builder.getOrCreate()
-
-# Create and run pipeline
-pipeline = DataPipeline(spark_session=spark, batch_size=5000)
+# Create pipeline (auto-detects Databricks environment)
+pipeline = DataPipeline(batch_size=5000)
 
 # Run complete pipeline
 stats = pipeline.run_pipeline()
@@ -79,17 +84,41 @@ cycle_stats = pipeline.run_single_cycle("cycle_123")
 cycles = pipeline.get_available_cycles()
 ```
 
+### Databricks Notebook Usage
+
+```python
+# Databricks notebook cell
+%pip install redis>=4.5.0
+
+# Import and run
+from src.main import DataPipeline
+
+# Initialize with Databricks optimizations
+pipeline = DataPipeline(batch_size=10000)  # Larger batch for cluster
+
+# Run pipeline
+stats = pipeline.run_pipeline()
+
+# Display results
+display(spark.createDataFrame(stats))
+```
+
 ### Using Individual Modules
 
 ```python
 from src.data.spark_operations import SparkDataProcessor
 from src.redis.connection import RedisConnectionManager
 from src.config.redis_config import get_redis_config
+from src.config.databricks_config import DatabricksSparkManager
 
-# Spark operations
-spark_processor = SparkDataProcessor()
+# Databricks Spark operations
+spark_processor = SparkDataProcessor()  # Auto-creates Databricks session
 df = spark_processor.get_calculations_dataframe()
 cycles = spark_processor.get_unique_cycles(df)
+
+# Test Delta connectivity
+spark_manager = DatabricksSparkManager()
+success = spark_manager.test_delta_connectivity()
 
 # Redis operations
 redis_config = get_redis_config()
@@ -97,31 +126,58 @@ redis_manager = RedisConnectionManager(redis_config)
 client = redis_manager.get_client()
 ```
 
-### Legacy Compatibility
+### Legacy Compatibility (Databricks Ready)
 
-For backward compatibility, use the legacy script:
+For backward compatibility, use the legacy script (now optimized for Databricks):
 
 ```python
-# Run the original script interface
+# Run the original script interface with Databricks optimizations
 python legacy_main.py
+```
+
+### Databricks Connect (Local Development)
+
+```bash
+# Set up environment variables
+export DATABRICKS_HOST="https://your-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="your-token"
+export DATABRICKS_CLUSTER_ID="your-cluster-id"
+
+# Test connection
+databricks-connect test
+
+# Run locally with Databricks Connect
+python src/main.py
 ```
 
 ## ⚙️ Configuration
 
 ### Environment Variables
 
-Configure Redis connection using environment variables:
+Configure for Databricks and Redis using environment variables:
 
 ```bash
-export REDIS_HOST="your-redis-host"
+# Databricks Connect (for local development)
+export DATABRICKS_HOST="https://your-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="your-personal-access-token"
+export DATABRICKS_CLUSTER_ID="your-cluster-id"
+
+# Redis configuration
+export REDIS_HOST="your-redis-host.redis.azure.net"
 export REDIS_PORT="10000"
 export REDIS_PASSWORD="your-password"
 export REDIS_SSL="true"
 export REDIS_MAX_CONNECTIONS="50"
 export REDIS_SOCKET_TIMEOUT="30"
+
+# TimeSeries configuration
 export REDIS_TS_RETENTION="2592000000"  # 30 days in milliseconds
 export REDIS_TS_CHUNK_SIZE="4096"
 export REDIS_TS_DUPLICATE_POLICY="LAST"
+
+# Spark optimizations
+export SPARK_CONF_spark_sql_adaptive_enabled="true"
+export SPARK_CONF_spark_databricks_delta_optimizeWrite_enabled="true"
 ```
 
 ### Programmatic Configuration
