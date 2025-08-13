@@ -1,0 +1,136 @@
+resources:
+  jobs:
+    data_processing_pipeline:
+      name: "Data Processing Pipeline - ${bundle.target}"
+      
+      # Job cluster configuration
+      job_clusters:
+        - job_cluster_key: main_cluster
+          new_cluster:
+            spark_version: "14.3.x-scala2.12"
+            node_type_id: ${var.cluster_node_type}
+            num_workers: ${var.cluster_num_workers}
+            driver_node_type_id: ${var.cluster_node_type}
+            
+            # Databricks runtime optimizations
+            spark_conf:
+              # Delta Lake configurations
+              "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension"
+              "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+              
+              # Performance optimizations
+              "spark.databricks.delta.optimizeWrite.enabled": "true"
+              "spark.databricks.delta.autoCompact.enabled": "true"
+              "spark.sql.adaptive.enabled": "true"
+              "spark.sql.adaptive.coalescePartitions.enabled": "true"
+              "spark.sql.adaptive.skewJoin.enabled": "true"
+              "spark.sql.adaptive.localShuffleReader.enabled": "true"
+              
+              # Memory and serialization optimizations
+              "spark.serializer": "org.apache.spark.serializer.KryoSerializer"
+              "spark.sql.execution.arrow.pyspark.enabled": "true"
+              
+              # Custom batch size configuration
+              "spark.conf.pipeline.batch_size": ${var.batch_size}
+              "spark.conf.redis.max_connections": ${var.redis_max_connections}
+            
+            # Runtime dependencies
+            init_scripts:
+              - workspace:
+                  destination: /Workspace/Shared/init_scripts/install_dependencies.sh
+            
+            # Environment variables for the cluster
+            spark_env_vars:
+              PIPELINE_BATCH_SIZE: ${var.batch_size}
+              REDIS_MAX_CONNECTIONS: ${var.redis_max_connections}
+              ENVIRONMENT: ${bundle.target}
+      
+      # Workflow tasks
+      tasks:
+        - task_key: data_processing_main
+          job_cluster_key: main_cluster
+          
+          python_task:
+            python_file: ./src/workflow_main.py
+            parameters:
+              - "--batch-size"
+              - ${var.batch_size}
+              - "--environment"
+              - ${bundle.target}
+          
+          # Task dependencies and configuration
+          timeout_seconds: 3600  # 1 hour timeout
+          max_retries: 2
+          min_retry_interval_millis: 10000
+          retry_on_timeout: true
+          
+          # Email notifications
+          email_notifications:
+            on_failure:
+              - data-engineering@yourcompany.com
+            on_success:
+              - data-engineering@yourcompany.com
+            no_alert_for_skipped_runs: true
+      
+      # Job-level configuration
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"  # Daily at 2 AM
+        timezone_id: "UTC"
+        pause_status: "PAUSED"  # Start paused, enable manually
+      
+      # Job timeout and retry settings
+      timeout_seconds: 7200  # 2 hours total timeout
+      max_concurrent_runs: 1
+      
+      # Tags for resource management
+      tags:
+        environment: ${bundle.target}
+        team: data-engineering
+        project: data-processing-pipeline
+        cost-center: analytics
+      
+      # Access control
+      access_control_list:
+        - user_name: data-engineering@yourcompany.com
+          permission_level: IS_OWNER
+        - group_name: data-engineers
+          permission_level: CAN_MANAGE_RUN
+        - group_name: data-analysts
+          permission_level: CAN_VIEW
+
+  # Additional monitoring job for pipeline health
+  jobs:
+    pipeline_monitoring:
+      name: "Pipeline Monitoring - ${bundle.target}"
+      
+      job_clusters:
+        - job_cluster_key: monitoring_cluster
+          new_cluster:
+            spark_version: "14.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 1
+            driver_node_type_id: "Standard_DS3_v2"
+      
+      tasks:
+        - task_key: health_check
+          job_cluster_key: monitoring_cluster
+          
+          python_task:
+            python_file: ./src/monitoring/health_check.py
+            parameters:
+              - "--environment"
+              - ${bundle.target}
+          
+          timeout_seconds: 300  # 5 minutes
+          max_retries: 1
+      
+      schedule:
+        quartz_cron_expression: "0 */30 * * * ?"  # Every 30 minutes
+        timezone_id: "UTC"
+        pause_status: "UNPAUSED"
+      
+      tags:
+        environment: ${bundle.target}
+        team: data-engineering
+        project: data-processing-pipeline
+        type: monitoring
