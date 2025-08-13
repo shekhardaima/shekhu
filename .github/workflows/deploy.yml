@@ -1,0 +1,241 @@
+name: Deploy Data Processing Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'release/*'
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      force_deploy:
+        description: 'Force deployment'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov flake8 black mypy
+        
+    - name: Run linting
+      run: |
+        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Run type checking
+      run: |
+        mypy src/ --ignore-missing-imports
+        
+    - name: Check code formatting
+      run: |
+        black --check src/
+        
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --cov=src --cov-report=xml
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: true
+
+  validate:
+    name: Validate Databricks Bundle
+    runs-on: ubuntu-latest
+    needs: test
+    
+    strategy:
+      matrix:
+        environment: [dev, staging, prod]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Databricks CLI
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        
+    - name: Configure Databricks CLI
+      env:
+        DATABRICKS_HOST: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.environment)] }}
+        DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.environment)] }}
+      run: |
+        echo "$DATABRICKS_HOST" > ~/.databricks-host
+        echo "$DATABRICKS_TOKEN" > ~/.databricks-token
+        databricks configure --host "$DATABRICKS_HOST" --token "$DATABRICKS_TOKEN"
+        
+    - name: Validate bundle
+      run: |
+        databricks bundle validate --target ${{ matrix.environment }}
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [test, validate]
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    environment: development
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Databricks CLI
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        
+    - name: Configure Databricks CLI
+      env:
+        DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_DEV }}
+        DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_DEV }}
+      run: |
+        databricks configure --host "$DATABRICKS_HOST" --token "$DATABRICKS_TOKEN"
+        
+    - name: Deploy to development
+      run: |
+        chmod +x scripts/deploy.sh
+        ./scripts/deploy.sh dev ${{ github.event.inputs.force_deploy == 'true' && '--force' || '' }}
+        
+    - name: Run health check
+      run: |
+        sleep 30  # Wait for deployment to settle
+        databricks jobs run-now --job-name "Pipeline Monitoring - dev"
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [test, validate]
+    if: startsWith(github.ref, 'refs/heads/release/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Databricks CLI
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        
+    - name: Configure Databricks CLI
+      env:
+        DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_STAGING }}
+        DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_STAGING }}
+      run: |
+        databricks configure --host "$DATABRICKS_HOST" --token "$DATABRICKS_TOKEN"
+        
+    - name: Deploy to staging
+      run: |
+        chmod +x scripts/deploy.sh
+        ./scripts/deploy.sh staging ${{ github.event.inputs.force_deploy == 'true' && '--force' || '' }}
+        
+    - name: Run health check
+      run: |
+        sleep 30
+        databricks jobs run-now --job-name "Pipeline Monitoring - staging"
+        
+    - name: Run integration tests
+      run: |
+        # Run staging-specific integration tests
+        databricks jobs run-now --job-name "Data Processing Pipeline - staging" --python-params '["--dry-run", "--log-level", "DEBUG"]'
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, validate, deploy-staging]
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod')
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Databricks CLI
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        
+    - name: Configure Databricks CLI
+      env:
+        DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_PROD }}
+        DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_PROD }}
+      run: |
+        databricks configure --host "$DATABRICKS_HOST" --token "$DATABRICKS_TOKEN"
+        
+    - name: Deploy to production
+      run: |
+        chmod +x scripts/deploy.sh
+        ./scripts/deploy.sh prod ${{ github.event.inputs.force_deploy == 'true' && '--force' || '' }}
+        
+    - name: Run health check
+      run: |
+        sleep 30
+        databricks jobs run-now --job-name "Pipeline Monitoring - prod"
+        
+    - name: Create deployment tag
+      if: github.ref == 'refs/heads/main'
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git tag -a "deploy-$(date +'%Y%m%d-%H%M%S')" -m "Production deployment $(date)"
+        git push origin --tags
+
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [deploy-dev, deploy-staging, deploy-prod]
+    if: always()
+    
+    steps:
+    - name: Notify on success
+      if: needs.deploy-dev.result == 'success' || needs.deploy-staging.result == 'success' || needs.deploy-prod.result == 'success'
+      run: |
+        echo "Deployment successful!"
+        # Add your notification logic here (Slack, Teams, email, etc.)
+        
+    - name: Notify on failure
+      if: needs.deploy-dev.result == 'failure' || needs.deploy-staging.result == 'failure' || needs.deploy-prod.result == 'failure'
+      run: |
+        echo "Deployment failed!"
+        # Add your notification logic here
+        exit 1

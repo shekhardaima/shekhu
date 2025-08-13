@@ -1,0 +1,56 @@
+bundle:
+  name: data-processing-pipeline
+  git:
+    origin_url: https://github.com/your-org/data-processing-pipeline
+
+variables:
+  # Default values that can be overridden per environment
+  cluster_node_type:
+    description: "Node type for the cluster"
+    default: "Standard_DS3_v2"
+  
+  cluster_num_workers:
+    description: "Number of worker nodes"
+    default: 4
+  
+  batch_size:
+    description: "Batch size for data processing"
+    default: 10000
+  
+  redis_max_connections:
+    description: "Maximum Redis connections"
+    default: 100
+
+include:
+  - resources/*.yml
+
+targets:
+  # Development environment
+  dev:
+    default: true
+    workspace:
+      host: https://adb-${var.workspace_id}.${var.workspace_region}.azuredatabricks.net
+    variables:
+      cluster_num_workers: 2
+      batch_size: 5000
+      redis_max_connections: 50
+    
+  # Staging environment  
+  staging:
+    workspace:
+      host: https://adb-${var.workspace_id}.${var.workspace_region}.azuredatabricks.net
+    variables:
+      cluster_num_workers: 4
+      batch_size: 10000
+      redis_max_connections: 75
+      
+  # Production environment
+  prod:
+    workspace:
+      host: https://adb-${var.workspace_id}.${var.workspace_region}.azuredatabricks.net
+    variables:
+      cluster_num_workers: 8
+      batch_size: 20000
+      redis_max_connections: 100
+    run_as:
+      service_principal_name: ${var.service_principal_name}
